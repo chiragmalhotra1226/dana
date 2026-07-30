@@ -1,3 +1,14 @@
+# Must run before any other import (Flask/Werkzeug/pydantic etc. create internal threading
+# primitives at import time). Under gunicorn's eventlet worker, the arbiter process imports this
+# module to find the WSGI callable BEFORE the worker gets a chance to monkey-patch, and the forked
+# worker inherits that already-imported, unpatched state — so patching later than this is too late
+# and causes "RLock(s) were not greened" / "Working outside of request context" errors in production.
+try:
+    import eventlet
+    eventlet.monkey_patch()
+except ImportError:
+    pass  # eventlet isn't installed locally (e.g. plain `python app.py` dev runs); harmless to skip
+
 import os
 import time
 import math
