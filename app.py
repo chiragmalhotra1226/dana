@@ -460,65 +460,83 @@ def run_simulation_step():
 
 def background_simulation_loop():
     """Continuously runs collision avoidance checks and pushes updates to frontend."""
+    print("[MarsNet] background simulation loop starting", flush=True)
+    tick_count = 0
     while True:
         socketio.sleep(TICK_DT)
 
-        if not simulation_state["running"]:
-            continue
+        try:
+            if not simulation_state["running"]:
+                continue
 
-        # Debris density slider: probabilistically auto-spawns debris while the sim runs
-        density = simulation_state["debris_density"]
-        if density > 0 and np.random.random() < density * 0.02:
-            spawn_debris()
+            # Debris density slider: probabilistically auto-spawns debris while the sim runs
+            density = simulation_state["debris_density"]
+            if density > 0 and np.random.random() < density * 0.02:
+                spawn_debris()
 
-        run_simulation_step()
+            run_simulation_step()
+            _emit_telemetry()
 
-        total_encounters = telemetry_data["avoidances"] + telemetry_data["collisions"]
-        success_rate = (telemetry_data["avoidances"] / total_encounters * 100.0) if total_encounters > 0 else 100.0
+            tick_count += 1
+            if tick_count % 100 == 0:  # heartbeat roughly every 10s at 10Hz, so Render logs prove it's alive
+                print(f"[MarsNet] heartbeat: tick={tick_count} running={simulation_state['running']} "
+                      f"satellites={len(simulation_state['satellites'])}", flush=True)
+        except Exception:
+            # A single bad tick must never permanently kill the loop (this previously happened
+            # silently — no more telemetry_update events would ever fire again, with nothing
+            # visible to the user beyond "the simulation just stopped moving").
+            import traceback
+            print("[MarsNet] ERROR in background_simulation_loop tick — continuing:", flush=True)
+            traceback.print_exc()
 
-        active_functional_sats = sum(1 for s in simulation_state["satellites"] if s["status"] in ["NOMINAL", "EVADING", "PREDICTED_CONFLICT"])
-        total_sats = len(simulation_state["satellites"])
-        network_coverage = (active_functional_sats / total_sats * 100.0) if total_sats else 100.0
 
-        active_threats = sum(1 for s in simulation_state["satellites"] if s["status"] == "COLLISION")
-        collision_risk = min(100.0, (active_threats / max(1, total_sats)) * 100.0)
-        life_risk = collision_risk * 0.5
+def _emit_telemetry():
+    total_encounters = telemetry_data["avoidances"] + telemetry_data["collisions"]
+    success_rate = (telemetry_data["avoidances"] / total_encounters * 100.0) if total_encounters > 0 else 100.0
 
-        coverage_history.append(1 if network_coverage >= 90.0 else 0)
-        coverage_uptime_pct = (sum(coverage_history) / len(coverage_history) * 100.0) if coverage_history else 100.0
+    active_functional_sats = sum(1 for s in simulation_state["satellites"] if s["status"] in ["NOMINAL", "EVADING", "PREDICTED_CONFLICT"])
+    total_sats = len(simulation_state["satellites"])
+    network_coverage = (active_functional_sats / total_sats * 100.0) if total_sats else 100.0
 
-        rl_collisions = telemetry_data["collisions"]
-        baseline_collisions = telemetry_data["baseline_collisions"]
-        collision_reduction_rate = (
-            (1 - rl_collisions / baseline_collisions) * 100.0 if baseline_collisions > 0 else None
-        )
+    active_threats = sum(1 for s in simulation_state["satellites"] if s["status"] == "COLLISION")
+    collision_risk = min(100.0, (active_threats / max(1, total_sats)) * 100.0)
+    life_risk = collision_risk * 0.5
 
-        fuel_capacity = simulation_state["fuel_capacity"]
-        if total_sats:
-            avg_fuel_remaining_pct = sum(
-                max(0.0, (fuel_capacity - s["fuel_used"]) / fuel_capacity) for s in simulation_state["satellites"]
-            ) / total_sats * 100.0
-        else:
-            avg_fuel_remaining_pct = 100.0
+    coverage_history.append(1 if network_coverage >= 90.0 else 0)
+    coverage_uptime_pct = (sum(coverage_history) / len(coverage_history) * 100.0) if coverage_history else 100.0
 
-        predicted_conflicts_count = sum(1 for s in simulation_state["satellites"] if s["predicted_conflict"])
+    rl_collisions = telemetry_data["collisions"]
+    baseline_collisions = telemetry_data["baseline_collisions"]
+    collision_reduction_rate = (
+        (1 - rl_collisions / baseline_collisions) * 100.0 if baseline_collisions > 0 else None
+    )
 
-        socketio.emit("telemetry_update", {
-            "total_reward": round(telemetry_data["total_reward"], 1),
-            "avoidances": int(telemetry_data["avoidances"]),
-            "collisions": int(rl_collisions),
-            "baseline_collisions": int(baseline_collisions),
-            "collision_reduction_rate": round(collision_reduction_rate, 1) if collision_reduction_rate is not None else None,
-            "success_rate": round(success_rate, 1),
-            "network_coverage": round(network_coverage, 1),
-            "coverage_uptime_pct": round(coverage_uptime_pct, 1),
-            "collision_risk": round(collision_risk, 1),
-            "life_risk": round(life_risk, 1),
-            "fleet_avg_fuel_remaining_pct": round(avg_fuel_remaining_pct, 1),
-            "predicted_conflicts_count": int(predicted_conflicts_count),
-            "predicted_zones": simulation_state.get("predicted_zones", []),
-            "satellites": simulation_state["satellites"],
-        })
+    fuel_capacity = simulation_state["fuel_capacity"]
+    if total_sats:
+        avg_fuel_remaining_pct = sum(
+            max(0.0, (fuel_capacity - s["fuel_used"]) / fuel_capacity) for s in simulation_state["satellites"]
+        ) / total_sats * 100.0
+    else:
+        avg_fuel_remaining_pct = 100.0
+
+    predicted_conflicts_count = sum(1 for s in simulation_state["satellites"] if s["predicted_conflict"])
+
+    socketio.emit("telemetry_update", {
+        "total_reward": round(telemetry_data["total_reward"], 1),
+        "avoidances": int(telemetry_data["avoidances"]),
+        "collisions": int(rl_collisions),
+        "baseline_collisions": int(baseline_collisions),
+        "collision_reduction_rate": round(collision_reduction_rate, 1) if collision_reduction_rate is not None else None,
+        "success_rate": round(success_rate, 1),
+        "network_coverage": round(network_coverage, 1),
+        "coverage_uptime_pct": round(coverage_uptime_pct, 1),
+        "collision_risk": round(collision_risk, 1),
+        "life_risk": round(life_risk, 1),
+        "fleet_avg_fuel_remaining_pct": round(avg_fuel_remaining_pct, 1),
+        "predicted_conflicts_count": int(predicted_conflicts_count),
+        "predicted_zones": simulation_state.get("predicted_zones", []),
+        "satellites": simulation_state["satellites"],
+    })
 
 
 def spawn_debris():
