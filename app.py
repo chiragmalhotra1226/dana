@@ -584,6 +584,7 @@ def serve_dashboard():
 # --- Socket.IO Events ---
 @socketio.on("connect")
 def handle_connect():
+    print(f"[MarsNet] client connected - server running={simulation_state['running']}", flush=True)
     emit("init_state", {
         "num_satellites": simulation_state["num_satellites"],
         "satellites": simulation_state["satellites"],
@@ -613,15 +614,18 @@ def handle_update_target_orbit(data):
 @socketio.on("start_simulation")
 def handle_start_simulation():
     simulation_state["running"] = True
+    print("[MarsNet] start_simulation received - running=True", flush=True)
     emit("simulation_status", {"running": True}, broadcast=True)
 
 @socketio.on("pause_simulation")
 def handle_pause_simulation():
     simulation_state["running"] = False
+    print("[MarsNet] pause_simulation received - running=False", flush=True)
     emit("simulation_status", {"running": False}, broadcast=True)
 
 @socketio.on("reset_simulation")
 def handle_reset_simulation():
+    print("[MarsNet] reset_simulation received", flush=True)
     reset_all_state()
     emit("simulation_status", {"running": simulation_state["running"]}, broadcast=True)
     emit("init_state", {
